@@ -185,3 +185,37 @@ func (s *SelectionRequest) HasBlockingFindings() bool {
 func (c Certificate) ValidAt(now time.Time) bool {
 	return c.Status == "valid" && now.Before(c.ExpiresAt)
 }
+
+type CertificateAssessment struct {
+	EvidenceKind  string
+	CertificateID string
+	Code          string
+	Blocking      bool
+	ValidUntil    time.Time
+}
+
+func EvaluateCertificateCoverage(certificates []Certificate, required []string, reviewAt, decisionDue time.Time) []CertificateAssessment {
+	result := make([]CertificateAssessment, 0, len(required))
+	for _, kind := range required {
+		assessment := CertificateAssessment{EvidenceKind: kind, Code: "missing", Blocking: true}
+		for _, certificate := range certificates {
+			if certificateEvidenceKind(certificate) == kind && certificate.ValidAt(reviewAt) {
+				assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "valid", Blocking: false, ValidUntil: certificate.ExpiresAt}
+				break
+			}
+		}
+		result = append(result, assessment)
+	}
+	return result
+}
+
+func certificateEvidenceKind(c Certificate) string {
+	value := strings.ToLower(c.Number)
+	if strings.Contains(value, "rohs") {
+		return "rohs"
+	}
+	if strings.Contains(value, "reach") {
+		return "reach"
+	}
+	return "certificate"
+}
