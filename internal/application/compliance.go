@@ -278,17 +278,90 @@ func (s *ComplianceService) EvaluateSubstitutePlan(ctx context.Context, requestI
 	if err != nil {
 		return SubstitutePlan{}, err
 	}
+
 	plan := SubstitutePlan{PrimaryID: primary.ID}
+	byID := make(map[string]domain.Material, len(candidates))
 	for _, candidate := range candidates {
+		if _, exists := byID[candidate.ID]; exists {
+			plan.addIssue("DUPLICATE_CANDIDATE", candidate.ID, "替代方案重复提交", true)
+			continue
+		}
+		byID[candidate.ID] = candidate
 		plan.CandidateIDs = append(plan.CandidateIDs, candidate.ID)
 		if candidate.ID == primary.ID {
-			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "SELF_REFERENCE", MaterialID: candidate.ID, Message: "替代物与主材料相同", Blocking: true})
-			plan.Blocking++
+			plan.addIssue("SELF_REFERENCE", candidate.ID, "替代物与主材料相同", true)
 		}
 		if !contains(candidate.AllowedProcesses, selection.Process) {
-			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "PROCESS_CONFLICT", MaterialID: candidate.ID, Message: "替代物不支持当前工艺", Blocking: true})
-			plan.Blocking++
+			plan.addIssue("PROCESS_CONFLICT", candidate.ID, "替代物不支持当前工艺", true)
+		}
+		if riskRank(candidate.RiskClass) > riskRank(primary.RiskClass) {
+			plan.addIssue("RISK_ESCALATION", candidate.ID, "替代物风险等级高于主材料", true)
+		}
+		for _, required := range primary.RequiredEvidence {
+			if !contains(candidate.RequiredEvidence, required) {
+				plan.addIssue("EVIDENCE_GAP", candidate.ID, "替代物缺少主材料要求的证据: "+required, true)
+			}
 		}
 	}
+
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string, []string)
+	visit = func(id string, path []string) {
+		if visiting[id] {
+			plan.addIssue("SUBSTITUTION_CYCLE", id, "替代关系形成循环: "+strings.Join(append(path, id), " -> "), true)
+			return
+		}
+		if visited[id] {
+			return
+		}
+		candidate, exists := byID[id]
+		if !exists {
+			plan.addIssue("UNKNOWN_SUBSTITUTE", id, "替代关系引用了未提交的材料", true)
+			return
+		}
+		visiting[id] = true
+		for _, next := range candidate.SubstituteIDs {
+			visit(next, append(path, id))
+		}
+		visiting[id] = false
+		visited[id] = true
+	}
+	for id := range byID {
+		visit(id, nil)
+	}
+	sort.Strings(plan.CandidateIDs)
+	sort.SliceStable(plan.Issues, func(i, j int) bool {
+		if plan.Issues[i].Code != plan.Issues[j].Code {
+			return plan.Issues[i].Code < plan.Issues[j].Code
+		}
+		return plan.Issues[i].MaterialID < plan.Issues[j].MaterialID
+	})
 	return plan, nil
+}
+
+func (p *SubstitutePlan) addIssue(code, materialID, message string, blocking bool) {
+	for _, issue := range p.Issues {
+		if issue.Code == code && issue.MaterialID == materialID {
+			return
+		}
+	}
+	p.Issues = append(p.Issues, SubstituteIssue{Code: code, MaterialID: materialID, Message: message, Blocking: blocking})
+	if blocking {
+		p.Blocking++
+	}
+}
+
+func riskRank(value string) int {
+	switch strings.ToLower(value) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
