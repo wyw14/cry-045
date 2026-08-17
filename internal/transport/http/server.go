@@ -3,7 +3,9 @@ package httptransport
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -186,13 +188,66 @@ type TimelineView struct {
 	Actor     string    `json:"actor"`
 	Before    string    `json:"before,omitempty"`
 	After     string    `json:"after,omitempty"`
+	Hash      string    `json:"hash,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 func prepareTimelineView(events []domain.AuditEvent, viewerRole string, from, to time.Time) []TimelineView {
-	result := make([]TimelineView, 0, len(events))
-	for _, event := range events {
-		result = append(result, TimelineView{ID: event.ID, Action: event.Action, Actor: event.ActorID, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
+	ordered := append([]domain.AuditEvent(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if !ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+	privileged := viewerRole == "compliance_owner" || viewerRole == "auditor"
+	seen := make(map[string]bool)
+	result := make([]TimelineView, 0, len(ordered))
+	for _, event := range ordered {
+		if seen[event.ID] {
+			continue
+		}
+		if !from.IsZero() && event.CreatedAt.Before(from) {
+			continue
+		}
+		if !to.IsZero() && !event.CreatedAt.Before(to) {
+			continue
+		}
+		seen[event.ID] = true
+		entry := TimelineView{ID: event.ID, Action: event.Action, Actor: timelineActor(event.ActorID, privileged), CreatedAt: event.CreatedAt}
+		if privileged {
+			entry.Before = event.Before
+			entry.After = event.After
+			entry.Hash = event.Hash
+		} else {
+			entry.Hash = shortAuditHash(event.Hash)
+		}
+		result = append(result, entry)
 	}
 	return result
+}
+
+func timelineActor(actorID string, privileged bool) string {
+	if privileged {
+		return actorID
+	}
+	normalized := strings.ToLower(strings.TrimSpace(actorID))
+	switch {
+	case strings.HasPrefix(normalized, "reviewer"), strings.HasPrefix(normalized, "compliance"):
+		return "reviewer"
+	case strings.HasPrefix(normalized, "designer"), strings.HasPrefix(normalized, "submitter"):
+		return "submitter"
+	case normalized == "":
+		return "system"
+	default:
+		return "member"
+	}
+}
+
+func shortAuditHash(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }
