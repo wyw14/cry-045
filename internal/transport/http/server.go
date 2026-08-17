@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -178,3 +179,20 @@ func parsePositiveInt(raw string, fallback, maximum int) int {
 }
 
 var _ repository.Store
+
+type TimelineView struct {
+	ID        string    `json:"id"`
+	Action    string    `json:"action"`
+	Actor     string    `json:"actor"`
+	Before    string    `json:"before,omitempty"`
+	After     string    `json:"after,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func prepareTimelineView(events []domain.AuditEvent, viewerRole string, from, to time.Time) []TimelineView {
+	result := make([]TimelineView, 0, len(events))
+	for _, event := range events {
+		result = append(result, TimelineView{ID: event.ID, Action: event.Action, Actor: event.ActorID, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
+	}
+	return result
+}
