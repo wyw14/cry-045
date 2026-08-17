@@ -2,6 +2,10 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -29,28 +33,14 @@ type MemoryStore struct {
 	opinions         []domain.Opinion
 	audits           []domain.AuditEvent
 	projectMaterials map[string]domain.ProjectMaterial
+	revisionReceipts map[string]revisionReceipt
 }
 
-func (s *MemoryStore) ApplyRevision(ctx context.Context, requestID string, expectedRevision int, idempotencyKey string, mutate func(*domain.SelectionRequest) error) (domain.SelectionRequest, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.SelectionRequest{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, ok := s.selections[requestID]
-	if !ok {
-		return domain.SelectionRequest{}, domain.ErrNotFound
-	}
-	if current.Revision < expectedRevision {
-		return domain.SelectionRequest{}, domain.ErrStaleRevision
-	}
-	next := cloneSelection(current)
-	if err := mutate(&next); err != nil {
-		return domain.SelectionRequest{}, err
-	}
-	next.Revision = expectedRevision + 1
-	s.selections[requestID] = cloneSelection(next)
-	return next, nil
+type revisionReceipt struct {
+	RequestID        string
+	ExpectedRevision int
+	Fingerprint      string
+	Result           domain.SelectionRequest
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -59,7 +49,70 @@ func NewMemoryStore() *MemoryStore {
 		certificates:     make(map[string]domain.Certificate),
 		selections:       make(map[string]domain.SelectionRequest),
 		projectMaterials: make(map[string]domain.ProjectMaterial),
+		revisionReceipts: make(map[string]revisionReceipt),
 	}
+}
+
+func (s *MemoryStore) ApplyRevision(ctx context.Context, requestID string, expectedRevision int, idempotencyKey string, mutate func(*domain.SelectionRequest) error) (domain.SelectionRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.SelectionRequest{}, err
+	}
+	if requestID == "" || expectedRevision < 1 || idempotencyKey == "" {
+		return domain.SelectionRequest{}, fmt.Errorf("request id, expected revision and idempotency key are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.selections[requestID]
+	if !ok {
+		return domain.SelectionRequest{}, domain.ErrNotFound
+	}
+	receiptKey := requestID + ":" + idempotencyKey
+	if receipt, exists := s.revisionReceipts[receiptKey]; exists {
+		if receipt.ExpectedRevision != expectedRevision {
+			return domain.SelectionRequest{}, fmt.Errorf("idempotency key reused for another revision")
+		}
+		return cloneSelection(receipt.Result), nil
+	}
+	if current.Revision != expectedRevision {
+		return domain.SelectionRequest{}, domain.ErrStaleRevision
+	}
+
+	next := cloneSelection(current)
+	if err := mutate(&next); err != nil {
+		return domain.SelectionRequest{}, err
+	}
+	if next.ID != current.ID || next.ProjectID != current.ProjectID {
+		return domain.SelectionRequest{}, fmt.Errorf("revision cannot change selection identity")
+	}
+	if next.Revision != current.Revision {
+		return domain.SelectionRequest{}, fmt.Errorf("mutator cannot set revision directly")
+	}
+	if err := next.ValidateShape(); err != nil {
+		return domain.SelectionRequest{}, err
+	}
+	next.Revision = current.Revision + 1
+	fingerprint, err := revisionFingerprint(current, next)
+	if err != nil {
+		return domain.SelectionRequest{}, err
+	}
+
+	stored := cloneSelection(next)
+	s.selections[requestID] = stored
+	s.revisionReceipts[receiptKey] = revisionReceipt{RequestID: requestID, ExpectedRevision: expectedRevision, Fingerprint: fingerprint, Result: stored}
+	return cloneSelection(stored), nil
+}
+
+func revisionFingerprint(before, after domain.SelectionRequest) (string, error) {
+	payload, err := json.Marshal(struct {
+		Before domain.SelectionRequest `json:"before"`
+		After  domain.SelectionRequest `json:"after"`
+	}{before, after})
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(payload)
+	return hex.EncodeToString(h[:]), nil
 }
 
 func NewDemoStore(now time.Time) *MemoryStore {
