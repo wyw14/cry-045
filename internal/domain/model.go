@@ -195,17 +195,60 @@ type CertificateAssessment struct {
 }
 
 func EvaluateCertificateCoverage(certificates []Certificate, required []string, reviewAt, decisionDue time.Time) []CertificateAssessment {
-	result := make([]CertificateAssessment, 0, len(required))
-	for _, kind := range required {
-		assessment := CertificateAssessment{EvidenceKind: kind, Code: "missing", Blocking: true}
-		for _, certificate := range certificates {
-			if certificateEvidenceKind(certificate) == kind && certificate.ValidAt(reviewAt) {
-				assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "valid", Blocking: false, ValidUntil: certificate.ExpiresAt}
-				break
-			}
-		}
-		result = append(result, assessment)
+	normalizedRequired := uniqueEvidenceKinds(required)
+	grouped := make(map[string][]Certificate)
+	for _, certificate := range certificates {
+		kind := certificateEvidenceKind(certificate)
+		grouped[kind] = append(grouped[kind], certificate)
 	}
+
+	result := make([]CertificateAssessment, 0, len(normalizedRequired))
+	for _, kind := range normalizedRequired {
+		candidates := append([]Certificate(nil), grouped[kind]...)
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if !candidates[i].ExpiresAt.Equal(candidates[j].ExpiresAt) {
+				return candidates[i].ExpiresAt.After(candidates[j].ExpiresAt)
+			}
+			return candidates[i].IssuedAt.After(candidates[j].IssuedAt)
+		})
+		result = append(result, assessEvidenceWindow(kind, candidates, reviewAt, decisionDue))
+	}
+	return result
+}
+
+func assessEvidenceWindow(kind string, candidates []Certificate, reviewAt, decisionDue time.Time) CertificateAssessment {
+	assessment := CertificateAssessment{EvidenceKind: kind, Code: "missing", Blocking: true}
+	for _, certificate := range candidates {
+		if certificate.Status == "revoked" || certificate.Status == "void" {
+			continue
+		}
+		if certificate.IssuedAt.After(reviewAt) {
+			continue
+		}
+		if !reviewAt.Before(certificate.ExpiresAt) {
+			assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "expired", Blocking: true, ValidUntil: certificate.ExpiresAt}
+			continue
+		}
+		if !decisionDue.IsZero() && certificate.ExpiresAt.Before(decisionDue) {
+			return CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "expires_before_decision", Blocking: true, ValidUntil: certificate.ExpiresAt}
+		}
+		return CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "valid_for_window", Blocking: false, ValidUntil: certificate.ExpiresAt}
+	}
+	return assessment
+}
+
+func uniqueEvidenceKinds(values []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		result = append(result, normalized)
+	}
+	sort.Strings(result)
 	return result
 }
 
