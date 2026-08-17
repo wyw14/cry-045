@@ -184,3 +184,22 @@ func cloneSelection(in domain.SelectionRequest) domain.SelectionRequest {
 	out.Opinions = append([]domain.Opinion(nil), in.Opinions...)
 	return out
 }
+
+type ProjectMaterialVersion struct {
+	Item              domain.ProjectMaterial
+	ApprovalBasisHash string
+	ReplacesRevision  int
+	RecordedAt        time.Time
+}
+
+func (s *MemoryStore) RecordProjectMaterialVersion(ctx context.Context, version ProjectMaterialVersion, idempotencyKey string) error {
+	return s.SaveProjectMaterial(ctx, version.Item)
+}
+
+func (s *MemoryStore) ListProjectMaterialVersions(ctx context.Context, projectID, materialID string) ([]ProjectMaterialVersion, error) {
+	current, err := s.GetProjectMaterial(ctx, projectID, materialID)
+	if err != nil {
+		return nil, err
+	}
+	return []ProjectMaterialVersion{{Item: current}}, nil
+}
