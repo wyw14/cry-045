@@ -31,6 +31,28 @@ type MemoryStore struct {
 	projectMaterials map[string]domain.ProjectMaterial
 }
 
+func (s *MemoryStore) ApplyRevision(ctx context.Context, requestID string, expectedRevision int, idempotencyKey string, mutate func(*domain.SelectionRequest) error) (domain.SelectionRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.SelectionRequest{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.selections[requestID]
+	if !ok {
+		return domain.SelectionRequest{}, domain.ErrNotFound
+	}
+	if current.Revision < expectedRevision {
+		return domain.SelectionRequest{}, domain.ErrStaleRevision
+	}
+	next := cloneSelection(current)
+	if err := mutate(&next); err != nil {
+		return domain.SelectionRequest{}, err
+	}
+	next.Revision = expectedRevision + 1
+	s.selections[requestID] = cloneSelection(next)
+	return next, nil
+}
+
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		materials:        make(map[string]domain.Material),
