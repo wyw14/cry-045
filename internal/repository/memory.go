@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,6 +31,15 @@ type MemoryStore struct {
 	opinions         []domain.Opinion
 	audits           []domain.AuditEvent
 	projectMaterials map[string]domain.ProjectMaterial
+	projectHistory   map[string][]ProjectMaterialVersion
+	projectReceipts  map[string]ProjectMaterialVersion
+}
+
+type ProjectMaterialVersion struct {
+	Item              domain.ProjectMaterial
+	ApprovalBasisHash string
+	ReplacesRevision  int
+	RecordedAt        time.Time
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -37,6 +48,8 @@ func NewMemoryStore() *MemoryStore {
 		certificates:     make(map[string]domain.Certificate),
 		selections:       make(map[string]domain.SelectionRequest),
 		projectMaterials: make(map[string]domain.ProjectMaterial),
+		projectHistory:   make(map[string][]ProjectMaterialVersion),
+		projectReceipts:  make(map[string]ProjectMaterialVersion),
 	}
 }
 
@@ -185,21 +198,64 @@ func cloneSelection(in domain.SelectionRequest) domain.SelectionRequest {
 	return out
 }
 
-type ProjectMaterialVersion struct {
-	Item              domain.ProjectMaterial
-	ApprovalBasisHash string
-	ReplacesRevision  int
-	RecordedAt        time.Time
-}
-
 func (s *MemoryStore) RecordProjectMaterialVersion(ctx context.Context, version ProjectMaterialVersion, idempotencyKey string) error {
-	return s.SaveProjectMaterial(ctx, version.Item)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if version.Item.ProjectID == "" || version.Item.MaterialID == "" || version.Item.RequestID == "" {
+		return fmt.Errorf("project, material and request identity are required")
+	}
+	if version.Item.ApprovedRevision < 1 || version.ApprovalBasisHash == "" || idempotencyKey == "" {
+		return fmt.Errorf("approved revision, basis hash and idempotency key are required")
+	}
+	key := version.Item.ProjectID + "/" + version.Item.MaterialID
+	receiptKey := key + ":" + idempotencyKey
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if receipt, exists := s.projectReceipts[receiptKey]; exists {
+		if receipt.Item.ApprovedRevision != version.Item.ApprovedRevision || receipt.ApprovalBasisHash != version.ApprovalBasisHash {
+			return fmt.Errorf("idempotency key reused for another approved basis")
+		}
+		return nil
+	}
+	history := s.projectHistory[key]
+	if len(history) > 0 {
+		latest := history[len(history)-1]
+		if version.Item.ApprovedRevision <= latest.Item.ApprovedRevision {
+			return domain.ErrStaleRevision
+		}
+		if version.ReplacesRevision != latest.Item.ApprovedRevision {
+			return fmt.Errorf("replacement must reference the latest approved revision")
+		}
+	} else if version.ReplacesRevision != 0 {
+		return fmt.Errorf("initial approval cannot replace another revision")
+	}
+	if version.RecordedAt.IsZero() {
+		version.RecordedAt = time.Now().UTC()
+	}
+	s.projectHistory[key] = append(history, cloneProjectVersion(version))
+	s.projectMaterials[key] = version.Item
+	s.projectReceipts[receiptKey] = cloneProjectVersion(version)
+	return nil
 }
 
 func (s *MemoryStore) ListProjectMaterialVersions(ctx context.Context, projectID, materialID string) ([]ProjectMaterialVersion, error) {
-	current, err := s.GetProjectMaterial(ctx, projectID, materialID)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return []ProjectMaterialVersion{{Item: current}}, nil
+	key := projectID + "/" + materialID
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history, exists := s.projectHistory[key]
+	if !exists {
+		return nil, domain.ErrNotFound
+	}
+	result := make([]ProjectMaterialVersion, len(history))
+	for index, version := range history {
+		result[index] = cloneProjectVersion(version)
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Item.ApprovedRevision < result[j].Item.ApprovedRevision })
+	return result, nil
 }
+
+func cloneProjectVersion(in ProjectMaterialVersion) ProjectMaterialVersion { out := in; return out }
