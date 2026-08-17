@@ -255,3 +255,40 @@ func contains(values []string, wanted string) bool {
 	}
 	return false
 }
+
+type SubstituteIssue struct {
+	Code       string
+	MaterialID string
+	Message    string
+	Blocking   bool
+}
+type SubstitutePlan struct {
+	PrimaryID    string
+	CandidateIDs []string
+	Issues       []SubstituteIssue
+	Blocking     int
+}
+
+func (s *ComplianceService) EvaluateSubstitutePlan(ctx context.Context, requestID string, candidates []domain.Material) (SubstitutePlan, error) {
+	selection, err := s.store.GetSelection(ctx, requestID)
+	if err != nil {
+		return SubstitutePlan{}, err
+	}
+	primary, err := s.store.GetMaterial(ctx, selection.MaterialID)
+	if err != nil {
+		return SubstitutePlan{}, err
+	}
+	plan := SubstitutePlan{PrimaryID: primary.ID}
+	for _, candidate := range candidates {
+		plan.CandidateIDs = append(plan.CandidateIDs, candidate.ID)
+		if candidate.ID == primary.ID {
+			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "SELF_REFERENCE", MaterialID: candidate.ID, Message: "替代物与主材料相同", Blocking: true})
+			plan.Blocking++
+		}
+		if !contains(candidate.AllowedProcesses, selection.Process) {
+			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "PROCESS_CONFLICT", MaterialID: candidate.ID, Message: "替代物不支持当前工艺", Blocking: true})
+			plan.Blocking++
+		}
+	}
+	return plan, nil
+}
