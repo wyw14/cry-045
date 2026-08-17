@@ -1,0 +1,10 @@
+.env
+var/
+dist/
+node_modules/
+.codex/
+.claude/
+.gocache/
+.gomodcache/
+*.sqlite
+*.db

@@ -1,0 +1,17 @@
+openapi: 3.0.3
+info:
+  title: Material Compliance API
+  version: 1.0.0
+paths:
+  /api/v1/materials:
+    get:
+      summary: List materials with allow-listed filters
+      responses:
+        '200': {description: OK}
+  /api/v1/selections/{id}/submit:
+    post:
+      summary: Submit a current selection revision
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Submitted}
