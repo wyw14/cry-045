@@ -31,6 +31,10 @@ func NewComplianceService(store repository.Store, clock Clock) *ComplianceServic
 	return &ComplianceService{store: store, clock: clock}
 }
 
+func (s *ComplianceService) ApplyRevisionAnswers(ctx context.Context, book *RevisionAnswerBook, requestID string, revision int, answers []RevisionAnswer) error {
+	return book.Apply(ctx, requestID, revision, answers)
+}
+
 func (s *ComplianceService) ValidateSelection(ctx context.Context, requestID string) (domain.SelectionRequest, error) {
 	sel, err := s.store.GetSelection(ctx, requestID)
 	if err != nil {
