@@ -29,19 +29,24 @@ func (l *ReceiptLedger) Submit(ctx context.Context, requestID, actor string, ste
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	pending := make([]SubmissionReceipt, 0, len(steps))
 	for _, step := range steps {
 		if err := step.Run(ctx); err != nil {
 			return err
 		}
-		l.mu.Lock()
-		l.receipts = append(l.receipts, SubmissionReceipt{
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pending = append(pending, SubmissionReceipt{
 			RequestID: requestID,
 			Step:      step.Name,
 			Actor:     actor,
 			CreatedAt: time.Now().UTC(),
 		})
-		l.mu.Unlock()
 	}
+	l.mu.Lock()
+	l.receipts = append(l.receipts, pending...)
+	l.mu.Unlock()
 	return nil
 }
 
