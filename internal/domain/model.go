@@ -199,13 +199,19 @@ func EvaluateCertificateCoverage(certificates []Certificate, required []string, 
 	for _, kind := range required {
 		assessment := CertificateAssessment{EvidenceKind: kind, Code: "missing", Blocking: true}
 		for _, certificate := range certificates {
-			if certificateEvidenceKind(certificate) == kind && certificate.ValidAt(reviewAt) {
-				assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "valid", Blocking: false, ValidUntil: certificate.ExpiresAt}
-				break
+			if certificateEvidenceKind(certificate) != kind || !certificate.ValidAt(reviewAt) {
+				continue
 			}
+			if certificate.ExpiresAt.After(decisionDue) {
+				assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "valid", Blocking: false, ValidUntil: certificate.ExpiresAt}
+			} else {
+				assessment = CertificateAssessment{EvidenceKind: kind, CertificateID: certificate.ID, Code: "expires_before_decision", Blocking: true, ValidUntil: certificate.ExpiresAt}
+			}
+			break
 		}
 		result = append(result, assessment)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].EvidenceKind < result[j].EvidenceKind })
 	return result
 }
 
