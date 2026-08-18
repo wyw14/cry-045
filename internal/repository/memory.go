@@ -41,7 +41,7 @@ func (s *MemoryStore) ApplyRevision(ctx context.Context, requestID string, expec
 	if !ok {
 		return domain.SelectionRequest{}, domain.ErrNotFound
 	}
-	if current.Revision < expectedRevision {
+	if expectedRevision < current.Revision {
 		return domain.SelectionRequest{}, domain.ErrStaleRevision
 	}
 	next := cloneSelection(current)
