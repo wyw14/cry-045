@@ -2,6 +2,9 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/wyw14/cry045/internal/domain"
@@ -19,16 +22,27 @@ type CertificateRegistry struct {
 }
 
 func NewCertificateRegistry() *CertificateRegistry {
-	return &CertificateRegistry{certificates: map[string]ProjectCertificate{}, bindings: map[string]string{}}
+	return &CertificateRegistry{
+		certificates: make(map[string]ProjectCertificate),
+		bindings:     make(map[string]string),
+	}
 }
 
 func (r *CertificateRegistry) Register(ctx context.Context, projectID string, certificate domain.Certificate) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" || strings.TrimSpace(certificate.ID) == "" || strings.TrimSpace(certificate.MaterialID) == "" {
+		return errors.New("project, certificate and material ids are required")
+	}
+	key := certificate.RegistryKey(projectID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.certificates[certificate.RegistryKey(projectID)] = ProjectCertificate{ProjectID: projectID, Certificate: certificate}
+	if existing, ok := r.certificates[key]; ok && existing.Certificate.MaterialID != certificate.MaterialID {
+		return fmt.Errorf("certificate id already belongs to material %s", existing.Certificate.MaterialID)
+	}
+	r.certificates[key] = ProjectCertificate{ProjectID: projectID, Certificate: cloneCertificate(certificate)}
 	return nil
 }
 
@@ -36,9 +50,22 @@ func (r *CertificateRegistry) Bind(ctx context.Context, projectID, materialID, c
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	projectID = strings.TrimSpace(projectID)
+	materialID = strings.TrimSpace(materialID)
+	certificateID = strings.TrimSpace(certificateID)
+	if projectID == "" || materialID == "" || certificateID == "" {
+		return errors.New("project, material and certificate ids are required")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.bindings[projectID+"/"+materialID] = certificateID
+	entry, ok := r.certificates[certificateKey(projectID, certificateID)]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	if entry.ProjectID != projectID || entry.Certificate.MaterialID != materialID {
+		return errors.New("certificate is outside the requested project/material scope")
+	}
+	r.bindings[bindingKey(projectID, materialID)] = certificateID
 	return nil
 }
 
@@ -46,12 +73,29 @@ func (r *CertificateRegistry) Bound(ctx context.Context, projectID, materialID s
 	if err := ctx.Err(); err != nil {
 		return domain.Certificate{}, err
 	}
+	projectID = strings.TrimSpace(projectID)
+	materialID = strings.TrimSpace(materialID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	id := r.bindings[projectID+"/"+materialID]
-	entry, ok := r.certificates[id]
+	id, ok := r.bindings[bindingKey(projectID, materialID)]
 	if !ok {
 		return domain.Certificate{}, domain.ErrNotFound
 	}
-	return entry.Certificate, nil
+	entry, ok := r.certificates[certificateKey(projectID, id)]
+	if !ok || entry.ProjectID != projectID || entry.Certificate.MaterialID != materialID {
+		return domain.Certificate{}, domain.ErrNotFound
+	}
+	return cloneCertificate(entry.Certificate), nil
+}
+
+func certificateKey(projectID, certificateID string) string {
+	return projectID + "\x00" + certificateID
+}
+
+func bindingKey(projectID, materialID string) string {
+	return projectID + "\x00" + materialID
+}
+
+func cloneCertificate(certificate domain.Certificate) domain.Certificate {
+	return certificate
 }
