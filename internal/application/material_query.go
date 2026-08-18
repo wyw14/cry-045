@@ -29,17 +29,8 @@ func QueryMaterials(materials []domain.Material, query MaterialQuery) MaterialPa
 	if query.PageSize < 1 {
 		query.PageSize = 20
 	}
-	start := (query.Page - 1) * query.PageSize
-	end := start + query.PageSize
-	if start > len(materials) {
-		start = len(materials)
-	}
-	if end > len(materials) {
-		end = len(materials)
-	}
-	items := append([]domain.Material(nil), materials[start:end]...)
-	filtered := items[:0]
-	for _, material := range items {
+	filtered := make([]domain.Material, 0, len(materials))
+	for _, material := range materials {
 		if query.Risk != "" && material.RiskClass != query.Risk {
 			continue
 		}
@@ -51,5 +42,14 @@ func QueryMaterials(materials []domain.Material, query MaterialQuery) MaterialPa
 	sort.SliceStable(filtered, func(i, j int) bool {
 		return strings.Compare(filtered[i].Code, filtered[j].Code) < 0
 	})
-	return MaterialPage{Items: filtered, Page: query.Page, PageSize: query.PageSize, Total: len(items)}
+	start := (query.Page - 1) * query.PageSize
+	end := start + query.PageSize
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	items := append([]domain.Material(nil), filtered[start:end]...)
+	return MaterialPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: len(filtered)}
 }
