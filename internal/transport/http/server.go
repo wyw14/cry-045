@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -12,8 +13,13 @@ import (
 	"github.com/wyw14/cry045/internal/application"
 	"github.com/wyw14/cry045/internal/domain"
 	"github.com/wyw14/cry045/internal/middleware"
+	"github.com/wyw14/cry045/internal/platform"
 	"github.com/wyw14/cry045/internal/repository"
 )
+
+func WriteLocalReport(ctx context.Context, writer platform.LocalReportWriter, name string, encode platform.ReportEncoder) (string, error) {
+	return writer.Write(ctx, name, encode)
+}
 
 type Server struct {
 	Engine   *gin.Engine
