@@ -29,7 +29,9 @@ type Certificate struct {
 	EvidenceRef string
 }
 
-func (c Certificate) RegistryKey(string) string { return c.ID }
+func (c Certificate) RegistryKey(projectID string) string {
+	return projectID + "/" + c.MaterialID + "/" + c.ID
+}
 
 type Attachment struct {
 	ID        string

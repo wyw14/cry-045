@@ -48,8 +48,9 @@ func (r *CertificateRegistry) Bound(ctx context.Context, projectID, materialID s
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	id := r.bindings[projectID+"/"+materialID]
-	entry, ok := r.certificates[id]
+	certificateID := r.bindings[projectID+"/"+materialID]
+	key := domain.Certificate{ID: certificateID, MaterialID: materialID}.RegistryKey(projectID)
+	entry, ok := r.certificates[key]
 	if !ok {
 		return domain.Certificate{}, domain.ErrNotFound
 	}
