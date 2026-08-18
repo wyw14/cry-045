@@ -279,6 +279,10 @@ func (s *ComplianceService) EvaluateSubstitutePlan(ctx context.Context, requestI
 		return SubstitutePlan{}, err
 	}
 	plan := SubstitutePlan{PrimaryID: primary.ID}
+	candidateByID := make(map[string]domain.Material, len(candidates))
+	for _, candidate := range candidates {
+		candidateByID[candidate.ID] = candidate
+	}
 	for _, candidate := range candidates {
 		plan.CandidateIDs = append(plan.CandidateIDs, candidate.ID)
 		if candidate.ID == primary.ID {
@@ -289,6 +293,61 @@ func (s *ComplianceService) EvaluateSubstitutePlan(ctx context.Context, requestI
 			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "PROCESS_CONFLICT", MaterialID: candidate.ID, Message: "替代物不支持当前工艺", Blocking: true})
 			plan.Blocking++
 		}
+		if riskRank(candidate.RiskClass) > riskRank(primary.RiskClass) {
+			plan.Issues = append(plan.Issues, SubstituteIssue{Code: "RISK_ESCALATION", MaterialID: candidate.ID, Message: "替代物风险等级高于主材料", Blocking: true})
+			plan.Blocking++
+		}
+	}
+	for _, member := range detectSubstitutionCycles(candidateByID) {
+		plan.Issues = append(plan.Issues, SubstituteIssue{Code: "SUBSTITUTION_CYCLE", MaterialID: member, Message: "替代关系形成循环引用", Blocking: true})
+		plan.Blocking++
 	}
 	return plan, nil
+}
+
+func riskRank(class string) int {
+	switch class {
+	case "low":
+		return 1
+	case "medium":
+		return 2
+	case "high":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func detectSubstitutionCycles(candidates map[string]domain.Material) []string {
+	inCycle := make(map[string]bool)
+	for start := range candidates {
+		visited := make(map[string]bool)
+		stack := []string{start}
+		for len(stack) > 0 {
+			current := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if visited[current] {
+				continue
+			}
+			visited[current] = true
+			material, ok := candidates[current]
+			if !ok {
+				continue
+			}
+			for _, next := range material.SubstituteIDs {
+				if next == start {
+					inCycle[start] = true
+				}
+				if _, ok := candidates[next]; ok && !visited[next] {
+					stack = append(stack, next)
+				}
+			}
+		}
+	}
+	members := make([]string, 0, len(inCycle))
+	for id := range inCycle {
+		members = append(members, id)
+	}
+	sort.Strings(members)
+	return members
 }
