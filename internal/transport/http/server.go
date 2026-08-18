@@ -39,6 +39,10 @@ type pageEnvelope struct {
 
 var materialListPolicy = listPolicy{AllowedSorts: map[string]bool{"code": true, "name": true, "risk": true}, AllowedFilters: map[string]bool{"risk": true, "process": true}, DefaultPageSize: 20, MaxPageSize: 100}
 
+func QueryMaterialPage(materials []domain.Material, query application.MaterialQuery) application.MaterialPage {
+	return application.QueryMaterials(materials, query)
+}
+
 func NewServer(service *application.ComplianceService, log *zap.Logger) *Server {
 	if log == nil {
 		log = zap.NewNop()
