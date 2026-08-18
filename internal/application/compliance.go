@@ -31,6 +31,10 @@ func NewComplianceService(store repository.Store, clock Clock) *ComplianceServic
 	return &ComplianceService{store: store, clock: clock}
 }
 
+func (s *ComplianceService) SubmitReceipts(ctx context.Context, ledger *ReceiptLedger, requestID, actor string, steps []ReceiptStep) error {
+	return ledger.Submit(ctx, requestID, actor, steps)
+}
+
 func (s *ComplianceService) ValidateSelection(ctx context.Context, requestID string) (domain.SelectionRequest, error) {
 	sel, err := s.store.GetSelection(ctx, requestID)
 	if err != nil {
